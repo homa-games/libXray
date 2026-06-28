@@ -34,21 +34,11 @@ jobs:
           ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
         run: python3 build/main.py android
 
-      - name: Split AAR by architecture
+      - name: Rename artifacts
         run: |
           VER=${{ inputs.version }}
 
-          mkdir aar_base
-          unzip libXray.aar -d aar_base
-
-          for ABI in arm64-v8a armeabi-v7a x86 x86_64; do
-            cp -r aar_base "aar_${ABI}"
-            for OTHER in arm64-v8a armeabi-v7a x86 x86_64; do
-              [ "$OTHER" != "$ABI" ] && rm -rf "aar_${ABI}/jni/${OTHER}"
-            done
-            (cd "aar_${ABI}" && zip -r "../libXray-${VER}-${ABI}.aar" .)
-          done
-
+          mv libXray.aar "libXray-${VER}.aar"
           mv libXray-sources.jar "libXray-sources-${VER}.jar"
 
       - name: Upload Artifacts
