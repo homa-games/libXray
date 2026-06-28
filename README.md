@@ -32,6 +32,58 @@ The mirror tag is created automatically by
 on every CalVer push. Existing CalVer tags can be backfilled with
 [`scripts/backfill-semver-tags.sh`](./scripts/backfill-semver-tags.sh).
 
+# Android Maven Repository
+
+Pre-built Android AAR artifacts are published to the `repo/` directory of this repository and can be consumed directly as a Maven repository.
+
+## Setup
+
+### Gradle (Kotlin DSL)
+
+Add the repository and dependency to your `build.gradle.kts`:
+
+```kotlin
+// settings.gradle.kts
+dependencyResolutionManagement {
+    repositories {
+        maven {
+            url = uri("https://raw.githubusercontent.com/homa-games/libXray/main/repo")
+        }
+    }
+}
+```
+
+```kotlin
+// build.gradle.kts
+dependencies {
+    implementation("io.github.homa-games:libXray:<version>")
+}
+```
+
+### Gradle (Groovy DSL)
+
+```groovy
+// settings.gradle
+dependencyResolutionManagement {
+    repositories {
+        maven {
+            url 'https://raw.githubusercontent.com/homa-games/libXray/main/repo'
+        }
+    }
+}
+```
+
+```groovy
+// build.gradle
+dependencies {
+    implementation 'io.github.homa-games:libXray:<version>'
+}
+```
+
+Replace `<version>` with the desired CalVer tag, e.g. `v26.6.27`.
+
+Available versions can be found in [`repo/io/github/homa-games/libXray/`](./repo/io/github/homa-games/libXray/).
+
 # Features
 
 ## build

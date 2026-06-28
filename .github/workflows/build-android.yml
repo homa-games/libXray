@@ -12,6 +12,8 @@ jobs:
   build:
     name: Build Android
     runs-on: ubuntu-26.04
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -28,6 +30,12 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: '3.12'
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          java-version: '21'
+          distribution: 'temurin'
 
       - name: Build Android Library
         env:
@@ -48,3 +56,25 @@ jobs:
           path: |
             libXray-*.aar
             libXray-sources*.jar
+
+      - name: Deploy to Maven repository
+        run: |
+          VER=${{ inputs.version }}
+          mvn deploy:deploy-file \
+            -DgroupId=io.github.homa-games \
+            -DartifactId=libXray \
+            -Dversion=${VER} \
+            -Dpackaging=aar \
+            -Dfile="libXray-${VER}.aar" \
+            -Dsources="libXray-sources-${VER}.jar" \
+            -DrepositoryId=repo \
+            -Durl="file://$(pwd)/repo" \
+            --batch-mode
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add repo/
+          git commit -m "Deploy libXray ${{ inputs.version }}"
+          git push
