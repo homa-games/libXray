@@ -47,7 +47,7 @@ Add the repository and dependency to your `build.gradle.kts`:
 dependencyResolutionManagement {
     repositories {
         maven {
-            url = uri("https://raw.githubusercontent.com/homa-games/libXray/main/repo")
+            url = uri("https://raw.githubusercontent.com/homa-games/libXray/repo/repo")
         }
     }
 }
@@ -67,7 +67,7 @@ dependencies {
 dependencyResolutionManagement {
     repositories {
         maven {
-            url 'https://raw.githubusercontent.com/homa-games/libXray/main/repo'
+            url 'https://raw.githubusercontent.com/homa-games/libXray/repo/repo'
         }
     }
 }
