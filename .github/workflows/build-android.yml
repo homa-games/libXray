@@ -49,14 +49,6 @@ jobs:
           mv libXray.aar "libXray-${VER}.aar"
           mv libXray-sources.jar "libXray-sources-${VER}.jar"
 
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: libXray-android-${{ inputs.version }}
-          path: |
-            libXray-*.aar
-            libXray-sources*.jar
-
       - name: Deploy to Maven repository
         run: |
           VER=${{ inputs.version }}
@@ -78,3 +70,50 @@ jobs:
           git add repo/
           git commit -m "Deploy libXray ${{ inputs.version }}"
           git push
+
+      - name: Split AAR by architecture
+        run: |
+          VER=${{ inputs.version }}
+
+          mkdir aar_base
+          unzip libXray-${VER}.aar -d aar_base
+
+          for ABI in arm64-v8a armeabi-v7a x86 x86_64; do
+            cp -r aar_base "aar_${ABI}"
+            for OTHER in arm64-v8a armeabi-v7a x86 x86_64; do
+              [ "$OTHER" != "$ABI" ] && rm -rf "aar_${ABI}/jni/${OTHER}"
+            done
+            (cd "aar_${ABI}" && zip -r "../libXray-${VER}-${ABI}.aar" .)
+          done
+
+      - name: Upload arm64-v8a Artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: libXray-android-arm64-v8a-${{ inputs.version }}
+          path: |
+            libXray-android-arm64-v8a-${{ inputs.version }}.zip
+            libXray-sources-${{ inputs.version }}.jar
+
+      - name: Upload armeabi-v7a Artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: libXray-android-armeabi-v7a-${{ inputs.version }}
+          path: |
+            libXray-android-armeabi-v7a-${{ inputs.version }}.zip
+            libXray-sources-${{ inputs.version }}.jar
+
+      - name: Upload x86 Artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: libXray-android-x86-${{ inputs.version }}
+          path: |
+            libXray-android-x86-${{ inputs.version }}.zip
+            libXray-sources-${{ inputs.version }}.jar
+
+      - name: Upload x86_64 Artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: libXray-android-x86_64-${{ inputs.version }}
+          path: |
+            libXray-android-x86_64-${{ inputs.version }}.zip
+            libXray-sources-${{ inputs.version }}.jar
