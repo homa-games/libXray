@@ -80,7 +80,7 @@ dependencies {
 }
 ```
 
-Replace `<version>` with the desired CalVer tag, e.g. `v26.6.27`.
+Replace `<version>` with the desired CalVer tag, e.g. `26.6.27`.
 
 Available versions can be found in [`repo/io/github/homa-games/libXray/`](./repo/io/github/homa-games/libXray/).
 
