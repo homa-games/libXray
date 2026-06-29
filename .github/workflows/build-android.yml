@@ -89,31 +89,31 @@ jobs:
       - name: Upload arm64-v8a Artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: libXray-android-arm64-v8a-${{ inputs.version }}
+          name: libXray-android-${{ inputs.version }}-arm64-v8a
           path: |
-            libXray-android-arm64-v8a-${{ inputs.version }}.zip
+            libXray-${{ inputs.version }}-arm64-v8a.aar
             libXray-sources-${{ inputs.version }}.jar
 
       - name: Upload armeabi-v7a Artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: libXray-android-armeabi-v7a-${{ inputs.version }}
+          name: libXray-android-${{ inputs.version }}-armeabi-v7a
           path: |
-            libXray-android-armeabi-v7a-${{ inputs.version }}.zip
+            libXray-${{ inputs.version }}-armeabi-v7a.aar
             libXray-sources-${{ inputs.version }}.jar
 
       - name: Upload x86 Artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: libXray-android-x86-${{ inputs.version }}
+          name: libXray-android-${{ inputs.version }}-x86
           path: |
-            libXray-android-x86-${{ inputs.version }}.zip
+            libXray-${{ inputs.version }}-x86.aar
             libXray-sources-${{ inputs.version }}.jar
 
       - name: Upload x86_64 Artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: libXray-android-x86_64-${{ inputs.version }}
+          name: libXray-android-${{ inputs.version }}-x86_64
           path: |
-            libXray-android-x86_64-${{ inputs.version }}.zip
+            libXray-${{ inputs.version }}-x86_64.aar
             libXray-sources-${{ inputs.version }}.jar
