@@ -7,6 +7,10 @@ on:
         description: 'Version tag (e.g., 26.6.27)'
         required: true
         type: string
+      commit_hash:
+        description: 'Commit hash (optional, defaults to latest commit)'
+        required: false
+        type: string
 
 jobs:
   build:
@@ -14,11 +18,16 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+    concurrency:
+      group: build-android
+      cancel-in-progress: false
+    env:
+      VER: ${{ inputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          fetch-tags: true
+          ref: ${{ inputs.commit_hash || github.ref }}
 
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -36,6 +45,7 @@ jobs:
         with:
           java-version: '21'
           distribution: 'temurin'
+          cache: 'maven'
 
       - name: Build Android Library
         env:
@@ -44,14 +54,11 @@ jobs:
 
       - name: Rename artifacts
         run: |
-          VER=${{ inputs.version }}
-
           mv libXray.aar "libXray-${VER}.aar"
           mv libXray-sources.jar "libXray-sources-${VER}.jar"
 
       - name: Deploy to Maven repository
         run: |
-          VER=${{ inputs.version }}
           mvn deploy:deploy-file \
             -DgroupId=io.github.homa-games \
             -DartifactId=libXray \
@@ -68,13 +75,11 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add repo/
-          git commit -m "Deploy libXray ${{ inputs.version }}"
+          git commit -m "Deploy libXray ${VER}"
           git push
 
       - name: Split AAR by architecture
         run: |
-          VER=${{ inputs.version }}
-
           mkdir aar_base
           unzip libXray-${VER}.aar -d aar_base
 
@@ -93,6 +98,7 @@ jobs:
           path: |
             libXray-${{ inputs.version }}-arm64-v8a.aar
             libXray-sources-${{ inputs.version }}.jar
+          if-no-files-found: error
 
       - name: Upload armeabi-v7a Artifacts
         uses: actions/upload-artifact@v7
@@ -101,6 +107,7 @@ jobs:
           path: |
             libXray-${{ inputs.version }}-armeabi-v7a.aar
             libXray-sources-${{ inputs.version }}.jar
+          if-no-files-found: error
 
       - name: Upload x86 Artifacts
         uses: actions/upload-artifact@v7
@@ -109,6 +116,7 @@ jobs:
           path: |
             libXray-${{ inputs.version }}-x86.aar
             libXray-sources-${{ inputs.version }}.jar
+          if-no-files-found: error
 
       - name: Upload x86_64 Artifacts
         uses: actions/upload-artifact@v7
@@ -117,3 +125,4 @@ jobs:
           path: |
             libXray-${{ inputs.version }}-x86_64.aar
             libXray-sources-${{ inputs.version }}.jar
+          if-no-files-found: error
