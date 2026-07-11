@@ -92,11 +92,8 @@ Compile script. It is recommended to always use this script to compile libXray. 
 
 depends on git and go.
 
-By default, the build script does not clone [Xray-core](https://github.com/XTLS/Xray-core). It uses Go modules and pins Xray-core to tag `v26.6.27` (recorded by Go as the matching pseudo-version).
+By default, the build script does not clone [Xray-core](https://github.com/XTLS/Xray-core). It uses Go modules and pins Xray-core to main commit `d5bc58dc` through its pseudo-version.
 Pass the optional `local` argument to use an existing local checkout at `../Xray-core` through a Go module `replace`.
-Linux and Windows builds also produce a small desktop wrapper executable:
-`bin/xray` or `bin/xray.exe`. The wrapper accepts `-configPath` pointing to a
-`LibXrayInvokeRequest` JSON file whose method is `runXray`.
 
 ### Usage
 
@@ -176,7 +173,11 @@ The C export is:
 
 ```c
 char* CGoInvoke(char* requestJSON);
+void CGoFree(char* value);
 ```
+
+`CGoInvoke` allocates its response. The caller must release every non-null
+response with `CGoFree`; do not use a platform allocator directly.
 
 The request is a JSON object:
 
@@ -184,11 +185,6 @@ The request is a JSON object:
 {
   "apiVersion": 1,
   "method": "runXray",
-  "env": {
-    "xray.location.asset": "/path/to/dat",
-    "xray.location.cert": "/path/to/dat",
-    "xray.tun.fd": "123"
-  },
   "payload": {
     "configPath": "/path/to/config.json"
   }
@@ -207,17 +203,16 @@ The response is a JSON object:
 
 Design notes:
 
-1. `Invoke.env` supports only fixed Xray-core runtime environment keys:
-   `xray.location.asset`, `xray.location.cert`, and `xray.tun.fd`.
-2. Non-empty `env` fields are set on the process before the method runs.
-   Missing fields are not unset and old values are not restored.
-3. `xray.json.strict`, `xray.location.config`, and `xray.location.confdir` are
-   load-stage process environment variables and cannot be supplied through
-   `Invoke.env`.
-4. `SetTunFd` has been removed. Set the `"xray.tun.fd"` key in the request
-   `env` object when the fd is only known at runtime.
-5. `countGeoData` is not backed by an Xray config, so its `datDir` is passed in
+1. A top-level `env` field is ignored and has no effect. Xray-core runtime
+   environment options belong in the root `env` object of the Xray config.
+2. `SetTunFd` has been removed. When the fd is only known at runtime, write
+   `xray.tun.fd` into the Xray config root `env` object before calling
+   `runXray`.
+3. `countGeoData` is not backed by an Xray config, so its `datDir` is passed in
    the method payload.
+4. The complete UTF-8 encoded Invoke request and response JSON envelopes are
+   limited to 16 MiB. If either limit is exceeded, Invoke returns a failure
+   response with `success: false`, `data: null`, and a size-limit error.
 
 Supported methods:
 
