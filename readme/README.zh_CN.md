@@ -69,13 +69,10 @@ python3 build/main.py windows local
 
 ### Windows
 
-依赖 LLVM MinGW 。
+依赖 `PATH` 中的 gcc 和 g++。
 
-你可使用 winget 安装 [LLVM MinGW](https://github.com/mstorsjo/llvm-mingw)。
-
-```shell
-winget install MartinStorsjo.LLVM-MinGW.UCRT
-```
+支持原生 amd64 和 arm64 构建。Release workflow 会在对应架构的 GitHub
+Windows runner 上分别构建产物。
 
 ## API
 
@@ -123,6 +120,7 @@ void CGoFree(char* value);
 2. `SetTunFd` 已删除。如果 fd 只能在运行时获得，请在调用 `runXray` 前把 `xray.tun.fd` 写入 Xray 配置根 `env` 对象。
 3. `countGeoData` 不依赖 Xray 配置，因此通过 method payload 的 `datDir` 传入数据目录。
 4. 完整的 UTF-8 编码 Invoke 请求和响应 JSON 包体限制为 16 MiB。任一方向超过限制时，Invoke 将返回 `success: false`、`data: null` 和对应的大小限制错误。
+5. `convertShareLinksToXrayJson` 会使用当前 Xray-core 配置构建器校验每个已解析的 outbound。无效 outbound 会被忽略；如果没有剩余的有效 outbound，该方法返回失败。校验不会创建或启动 Xray instance。
 
 支持的 method：
 
@@ -143,6 +141,25 @@ getXrayState
 ## controller
 
 用于解决 Android 上 socket protect 问题。
+
+### DNS 解析器
+
+Android VPN 运行时可能会向 Go 解析器提供回环 DNS 地址。请在调用
+`runXray` 前调用 `SetDNS`，让 Go 使用 VPN 配置指定的 DNS，并通过
+`protectFd` 将 DNS socket 排除在 VPN 隧道外。DNS 必须是包含端口的 IP
+地址，例如 `8.8.8.8:53` 或 `[2001:4860:4860::8888]:53`。
+
+Xray 停止后调用 `ResetDNS`。这两个 API 仅存在于 Android 产物中，并会
+修改 Go 进程级默认解析器。
+
+```java
+LibXray.setDNS(controller, "8.8.8.8:53");
+LibXray.invoke(runXrayRequest);
+
+// 稍后停止 Core 时：
+LibXray.invoke(stopXrayRequest);
+LibXray.resetDNS();
+```
 
 ## geo
 

@@ -153,13 +153,10 @@ depend on gcc and g++.
 
 ### Windows
 
-depend on LLVM MinGW.
+Depends on gcc and g++ in `PATH`.
 
-you can use winget to install [LLVM MinGW](https://github.com/mstorsjo/llvm-mingw).
-
-```shell
-winget install MartinStorsjo.LLVM-MinGW.UCRT
-```
+Native amd64 and arm64 builds are supported. The release workflow builds each
+architecture on its matching GitHub-hosted Windows runner.
 
 ## API
 
@@ -213,6 +210,9 @@ Design notes:
 4. The complete UTF-8 encoded Invoke request and response JSON envelopes are
    limited to 16 MiB. If either limit is exceeded, Invoke returns a failure
    response with `success: false`, `data: null`, and a size-limit error.
+5. `convertShareLinksToXrayJson` validates each parsed outbound with the current
+   Xray-core config builder. Invalid outbounds are omitted, and the method fails
+   if none remain. Validation does not create or start an Xray instance.
 
 Supported methods:
 
@@ -235,6 +235,26 @@ getXrayState
 ### Socket protect
 
 Used to solve the socket protect problem on Android.
+
+### DNS resolver
+
+Android may expose a loopback DNS server to Go's resolver while a VPN is
+active. Call `SetDNS` before `runXray` to make Go use the DNS server selected by
+the VPN configuration and protect the DNS socket from the VPN tunnel. The
+server must be an IP endpoint with a port, such as `8.8.8.8:53` or
+`[2001:4860:4860::8888]:53`.
+
+Call `ResetDNS` after Xray has stopped. These APIs are available only in the
+Android artifact and change the process-wide Go resolver.
+
+```java
+LibXray.setDNS(controller, "8.8.8.8:53");
+LibXray.invoke(runXrayRequest);
+
+// Later, when stopping the core:
+LibXray.invoke(stopXrayRequest);
+LibXray.resetDNS();
+```
 
 ### Process finder (per-app routing)
 
