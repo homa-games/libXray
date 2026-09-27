@@ -47,10 +47,6 @@ func (proxy xrayShareLink) parseSecurityFromURL(link *url.URL, streamSettings *c
 		tlsSettings.ALPN = new(conf.StringList(strings.Split(alpn, ",")))
 	}
 
-	if query.Get("insecure") == "1" {
-		tlsSettings.AllowInsecure = true
-	}
-
 	pbk := query.Get("pbk")
 	realitySettings.Password = pbk
 	realitySettings.PublicKey = pbk
@@ -65,7 +61,7 @@ func (proxy xrayShareLink) parseSecurityFromURL(link *url.URL, streamSettings *c
 	}
 
 	switch proxy.link.Scheme {
-	case "trojan", "hysteria2", "hy2":
+	case "trojan":
 		if streamSettings.Security == "none" {
 			streamSettings.Security = "tls"
 		}

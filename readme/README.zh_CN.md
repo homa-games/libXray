@@ -16,7 +16,7 @@
 
 依赖 git 和 go。
 
-默认情况下，编译脚本不会 clone [Xray-core](https://github.com/XTLS/Xray-core)，而是通过 Go modules 的 pseudo-version 将 Xray-core 固定到发布版本 `v26.7.28`。
+默认情况下，编译脚本不会 clone [Xray-core](https://github.com/XTLS/Xray-core)，而是通过 Go modules 的 pseudo-version 将 Xray-core 固定到发布版本 `v26.9.9`。
 传入可选参数 `local` 时，会通过 Go module `replace` 改用已有的本地仓库 `../Xray-core`。
 
 ### 使用方式
@@ -33,6 +33,20 @@ python3 build/main.py linux local
 python3 build/main.py windows
 python3 build/main.py windows local
 ```
+
+构建成功或失败后都会恢复 `go.mod` 和 `go.sum`。gomobile 默认解析 `latest`，
+也可通过环境变量 `LIBXRAY_GOMOBILE_VERSION` 指定 Go 模块版本；`gomobile` 与
+`gobind` 使用同一个解析版本。
+
+Linux 和 Windows 构建还会生成 `bin/xray` 或 `bin/xray.exe`。该会话 Core
+会保护 Go DNS 查询不被 VPN 路由重新捕获，并且只接受以下命令：
+
+```shell
+xray run -dns <IP:port> -interface <网卡名> -config <xray.json>
+```
+
+三个参数都必须提供。`-dns` 必须是 IP endpoint，`-config` 直接指向 Xray
+JSON 配置。
 
 > [!WARNING]
 > **每个进程只能使用一个 Go runtime。** Go 不支持在同一进程中加载多个独立构建的
@@ -111,7 +125,7 @@ void CGoFree(char* value);
 
 ```json
 {
-  "apiVersion": 2,
+  "apiVersion": 3,
   "method": "runXray",
   "payload": {
     "xrayJson": "{\"outbounds\":[...]}"
@@ -131,13 +145,13 @@ void CGoFree(char* value);
 
 设计决定：
 
-1. Invoke 当前只接受 `apiVersion: 2`。Xray 配置通过 `xrayJson` 传递 UTF-8 JSON 文本；libXray 不读取配置文件路径。
+1. Invoke 只接受 `apiVersion: 3`，API 版本固定为 3。合同变更在该版本内同步消费方与接入文档。Xray 配置通过 `xrayJson` 传递 UTF-8 JSON 文本；libXray 不读取配置文件路径。
 2. 顶层 `env` 字段会被忽略且不会生效。Xray-core 运行时环境项应写入 Xray 配置根 `env` 对象。
 3. `SetTunFd` 已删除。如果 fd 只能在运行时获得，请在调用 `runXray` 前把 `xray.tun.fd` 写入 Xray 配置根 `env` 对象。
 4. `countGeoData` 不依赖 Xray 配置，因此通过 method payload 的 `datDir` 传入数据目录。
 5. 完整的 UTF-8 编码 Invoke 请求和响应 JSON 包体限制为 16 MiB。任一方向超过限制时，Invoke 将返回 `success: false`、`data: null` 和对应的大小限制错误。
-6. `convertShareLinksToXrayJson` 会使用当前 Xray-core 配置构建器校验每个已解析的 outbound。无效 outbound 会被忽略；如果没有剩余的有效 outbound，该方法返回失败。校验不会创建或启动 Xray instance。可选的 `age.secretKey` 会在现有解析流程前于内存中解密官方 age ASCII armor；明文输入保持原有行为。
-7. Xray-core 的系统拨号 DNS client 和 outbound manager 属于进程级状态。当 `runXray` 正在运行时，通过 `pingBatch`、`testXray` 或导出的 Go API 创建另一个 Xray instance，可能覆盖这些状态并影响正在运行的 instance。关闭临时 instance 不会恢复之前的状态。libXray 不对并发 instance 进行串行化、隔离或状态恢复；调用方如需同时运行多个 instance，必须将它们放在不同进程中。
+6. `convertShareLinksToXrayJson` 会使用当前 Xray-core 配置构建器校验每个已解析的 outbound。无效 outbound 会被忽略；如果没有剩余的有效 outbound，该方法返回失败。校验不会创建或启动 Xray instance。Xray JSON 输入仅作为节点来源，只保留根级 `outbounds`，忽略其他根字段。响应仅包含 libXray 分享链接支持的字段，不支持的字段和生成的空字段会被省略；XHTTP `extra` 与 FinalMask mask `settings` 中的原始 JSON 保持不变。每次成功响应仅包含投影后的 `outbounds` 列表。可选的 `age.secretKey` 会在现有解析流程前于内存中解密官方 age ASCII armor；明文输入保持原有行为。
+7. Xray-core 的系统拨号 DNS client 和 outbound manager 属于进程级状态。`pingBatch`、`testXray` 及对应导出的 Go 入口均取得受管理生命周期锁，在加载/构建配置前拒绝同进程已运行的 `runXray` instance。批量测速在全部 worker 和临时核心关闭后才释放锁，这些操作也彼此串行。由管理 API 之外创建的 instance 不在检测或恢复范围内；可能与它们重叠的调用仍须使用独立进程。
 
 支持的 method：
 
@@ -208,21 +222,37 @@ LibXray.resetDNS();
 
 ## share
 
-libXray 使用 `sendThrough` 来存储节点名称。
-
-### clash_meta
-
-解析 Clash.Meta 配置。
+libXray 使用 `tag` 存储节点名称。`sendThrough` 保留 Xray 原生语义，用于指定本地绑定地址。
 
 ### generate_share
 
-转换 Xray Json 为 VMessAEAD/VLESS 分享协议。
+按照 [Xray-core 讨论 #716](https://github.com/XTLS/Xray-core/discussions/716)
+将 Xray JSON 转换为 VMess AEAD / VLESS 分享链接，同时支持 SS、SOCKS 和 Trojan。
+VMess 始终生成 AEAD URI，不生成旧版二维码格式。
+
+没有对应分享格式的 outbound 会被跳过；无法生成任何分享链接时返回失败。
 
 ### parse_share
 
-转换 VMessAEAD/VLESS 分享协议为 Xray Json。
+将 VMess AEAD / VLESS、SS、SOCKS、Trojan 分享链接以及旧版 `vmessQrCode`
+链接解析为 Xray JSON。
 
-转换 VMessQRCode 为 Xray Json。
+保留 Xray JSON 节点输入以及 Base64 / Age 订阅包装。Clash/Mihomo 配置和
+`hysteria2://` / `hy2://` URI 不受支持。
+这一限制仅针对分享链接转换，不影响原生 Xray JSON 配置中的 Hysteria2。
+
+#### 解析结果
+
+`convertShareLinksToXrayJson` 只有一种响应结构。payload 包含 `text` 和可选的
+`age`。每次转换成功均返回
+`data: {"outbounds":[...]}`，不包含统计或额外的 `config` 包装。
+
+无效单项会被跳过，不丢弃其余有效节点。列表按源顺序保留投影且可构建的
+outbound，不做节点 hash 比较、去重或失败节点计数。
+
+没有可用节点、无法识别格式、整份文档语法错误、容器错误或解密失败时，
+返回 `success: false` 与 `data: null`。错误文案不含被拒绝的候选或解密明文。
+调用方不得在可用节点为零时导入或覆盖订阅。
 
 ### age 加密订阅
 
@@ -233,7 +263,7 @@ libXray 使用 `sendThrough` 来存储节点名称。
 
 ```json
 {
-  "apiVersion": 2,
+  "apiVersion": 3,
   "method": "convertShareLinksToXrayJson",
   "payload": {
     "text": "-----BEGIN AGE ENCRYPTED FILE-----\n...",
@@ -251,7 +281,7 @@ libXray 使用 `sendThrough` 来存储节点名称。
 
 ```json
 {
-  "apiVersion": 2,
+  "apiVersion": 3,
   "method": "generateAgeKeyPair",
   "payload": {
     "keyType": "x25519"
@@ -282,7 +312,7 @@ libXray 使用 `sendThrough` 来存储节点名称。
 
 ```json
 {
-  "apiVersion": 2,
+  "apiVersion": 3,
   "method": "pingBatch",
   "payload": {
     "configs": [
@@ -295,7 +325,8 @@ libXray 使用 `sendThrough` 来存储节点名称。
       }
     ],
     "timeout": 5,
-    "url": "https://cp.cloudflare.com/"
+    "url": "https://cp.cloudflare.com/",
+    "locationUrl": "https://ip-check-perf.radar.cloudflare.com/"
   }
 }
 ```
@@ -306,22 +337,44 @@ libXray 使用 `sendThrough` 来存储节点名称。
 批次请求本身被接受时，顶层 response 为成功；每个配置通过自己的结果表示成功或
 失败。`delay` 为 `10000` 表示错误，`11000` 表示超时。结果数组与输入配置数组
 长度相同且顺序一致。
-通过 `streamSettings.sockopt.dialerProxy` 或 `proxySettings.tag` 引用的
-outbound 依赖会被自动包含。
+`delay` 始终输出，包含成功的 0 毫秒结果。
+通过 `streamSettings.sockopt.dialerProxy` 引用的 outbound 依赖会被自动包含。
+已废弃的 `proxySettings` 字段由 Xray-core 拒绝。
+
+`locationUrl` 为可选的绝对 HTTP(S) 地址。省略时不请求位置、不返回位置字段；
+传入时，每个完成准备的配置先执行测速 HEAD，再执行位置 GET，两者使用同一个
+强制经过当前所选 outbound 及其依赖的 client。每个请求各有一次配置的超时，
+因此单项最多可能使用两倍超时时间。位置请求时间不计入 `delay`；两个结果独立：
+`success`、`delay`、`error` 只表示延迟结果，位置失败不影响成功的延迟，延迟
+失败后仍尝试位置 GET。
+
+GET 成功后把响应正文原样放入 `locationJson` 字符串。JSON 解析和数据源专属字段
+处理由 App 负责。数据源必须返回 HTTP 200，正文最大 64 KiB；传输或正文读取失败
+改为返回 `locationError`。错误不回显 URL、凭据或响应正文。无效 outbound 保留
+原有逐项失败结果，不发出这两个请求。
 
 ### testXray
 
-直接校验传入的 Xray JSON 文本，不读取配置文件：
+加载并构建传入的完整 Xray JSON 文本。payload 仅包含 `xrayJson`，成功时返回
+`data: {}`：
 
 ```json
 {
-  "apiVersion": 2,
+  "apiVersion": 3,
   "method": "testXray",
   "payload": {
     "xrayJson": "{\"outbounds\":[...]}"
   }
 }
 ```
+
+Go 入口 `TestXray` 只调用 `core.LoadConfig`，不构造或启动 Xray instance 及运行时
+handler。它校验包括 TUN/WireGuard 定义在内的配置结构，不创建设备、监听、日志文件
+或后台连接。构建器仍可能读取本地 GeoData/证书，并将根 `env` 应用到当前进程。
+Geodata assets 声明只校验 HTTPS URL 和已存在的本地文件，下载器及 cron 不在校验时运行。
+
+校验成功只说明配置可以构建，不保证运行资源可用、instance 可以启动或网络可以连接。
+调用方仍须处理实际启动失败。
 
 ### runXray
 
@@ -330,7 +383,7 @@ outbound 依赖会被自动包含。
 
 ### metrics
 
-统计。
+App 直接通过 Xray metrics HTTP API 读取当前 instance 的流量计数；libXray 不采样或保存流量。
 
 参考如下配置：
 
@@ -358,10 +411,7 @@ metrics 服务通过 HTTP 暴露 Xray 运行时计数。例如 `listen` 为
 http://localhost:49227/debug/vars
 ```
 
-注意：
-
-1. 当进行测试延迟或验证配置时，确保 `metrics` 为 `null`。
-2. libXray 这里只需要 `listen` 字段。直接用 HTTP 客户端查询 `/debug/vars`，不再通过 libXray 包装。
+libXray 这里只需要 `listen` 字段。直接用 HTTP 客户端查询 `/debug/vars`，不再通过 libXray 包装。
 
 ### validation
 
