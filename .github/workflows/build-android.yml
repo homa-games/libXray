@@ -1,5 +1,8 @@
 name: Build Android
 
+env:
+  NDK_VERSION: r29
+
 on:
   workflow_dispatch:
     inputs:
@@ -46,9 +49,13 @@ jobs:
           java-version: '21'
           distribution: 'temurin'
 
+      - name: Set up Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: ${{ env.NDK_VERSION }}
+          add-to-path: true
+
       - name: Build Android Library
-        env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
         run: python3 build/main.py android
 
       - name: Rename artifacts
@@ -77,51 +84,11 @@ jobs:
           git commit -m "Deploy libXray ${VER}"
           git push
 
-      - name: Split AAR by architecture
-        run: |
-          mkdir aar_base
-          unzip libXray-${VER}.aar -d aar_base
-
-          for ABI in arm64-v8a armeabi-v7a x86 x86_64; do
-            cp -r aar_base "aar_${ABI}"
-            for OTHER in arm64-v8a armeabi-v7a x86 x86_64; do
-              [ "$OTHER" != "$ABI" ] && rm -rf "aar_${ABI}/jni/${OTHER}"
-            done
-            (cd "aar_${ABI}" && zip -r "../libXray-${VER}-${ABI}.aar" .)
-          done
-
-      - name: Upload arm64-v8a Artifacts
+      - name: Upload universal Android artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: libXray-android-${{ inputs.version }}-arm64-v8a
+          name: libXray-android-${{ inputs.version }}
           path: |
-            libXray-${{ inputs.version }}-arm64-v8a.aar
-            libXray-sources-${{ inputs.version }}.jar
-          if-no-files-found: error
-
-      - name: Upload armeabi-v7a Artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: libXray-android-${{ inputs.version }}-armeabi-v7a
-          path: |
-            libXray-${{ inputs.version }}-armeabi-v7a.aar
-            libXray-sources-${{ inputs.version }}.jar
-          if-no-files-found: error
-
-      - name: Upload x86 Artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: libXray-android-${{ inputs.version }}-x86
-          path: |
-            libXray-${{ inputs.version }}-x86.aar
-            libXray-sources-${{ inputs.version }}.jar
-          if-no-files-found: error
-
-      - name: Upload x86_64 Artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: libXray-android-${{ inputs.version }}-x86_64
-          path: |
-            libXray-${{ inputs.version }}-x86_64.aar
+            libXray-${{ inputs.version }}.aar
             libXray-sources-${{ inputs.version }}.jar
           if-no-files-found: error
