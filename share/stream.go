@@ -36,6 +36,9 @@ func (proxy xrayShareLink) parseSecurityFromURL(link *url.URL, streamSettings *c
 	realitySettings.Fingerprint = fp
 
 	sni := query.Get("sni")
+	if sni == "" && (link.Scheme == "vmess" || link.Scheme == "vless") {
+		sni = link.Hostname()
+	}
 	tlsSettings.ServerName = sni
 	realitySettings.ServerName = sni
 
@@ -61,7 +64,7 @@ func (proxy xrayShareLink) parseSecurityFromURL(link *url.URL, streamSettings *c
 	}
 
 	switch proxy.link.Scheme {
-	case "trojan":
+	case "trojan", "hysteria2", "hy2":
 		if streamSettings.Security == "none" {
 			streamSettings.Security = "tls"
 		}

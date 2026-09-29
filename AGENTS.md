@@ -5,8 +5,9 @@ App behavior out of the generic library.
 
 ## API and runtime
 
-Before changing a method, read [README API](README.md#api), its method section,
-and the models/dispatch in `invoke_model.go` and `invoke.go`.
+When changing a public API contract, read [README API](README.md#api), the
+affected method section, and `invoke_model.go` / `invoke.go`. Internal-only
+changes need the relevant implementation and tests, not the entire API guide.
 
 - Keep `LibXrayAPIVersion` fixed at `3`; do not increment it within this release.
   Synchronize contract changes with typed models, downstream consumers, tests,
@@ -14,9 +15,10 @@ and the models/dispatch in `invoke_model.go` and `invoke.go`.
 - Applications use `Invoke`/`CGoInvoke` with typed requests. Config methods receive
   `xrayJson` text, not configuration file paths. Runtime `env` belongs inside
   that Xray JSON. File-oriented APIs and the desktop Core CLI retain file access.
-- `TestXray` only loads/builds configuration with `core.LoadConfig`; it neither
-  constructs nor starts an instance. Success does not guarantee startup or
-  connectivity. Builders may still read local assets/certificates and apply `env`.
+- `TestXray` constructs an instance through `newXrayInstance` and closes it
+  without calling `Start`. Callers own minimal/filtered validation configs.
+  Process-level side effects are accepted; startup resources and connectivity
+  remain outside this check. See [testXray](README.md#testxray) for limitations.
 - Manage one running instance. Validation and temporary instances must reject
   managed-instance overlap before loading configuration and hold the lifecycle
   lock through worker completion and instance cleanup. Close temporary instances
@@ -45,28 +47,33 @@ and the relevant platform/controller section in README.
   after a build and check the build command's success and resulting artifacts.
 - Modify an adjacent Xray-core checkout only when explicitly requested.
 
-Common builds:
+Targets and local-core options are documented in [build usage](README.md#usage).
 
-```sh
-python3 build/main.py android
-python3 build/main.py apple go
-```
+## Agent skills
 
-Other targets and local-core options are documented in [build usage](README.md#usage).
+### Issue tracker
 
-## Pull requests
+GitHub Issues for `XTLS/libXray`. Before issue, PR or review work, read
+[issue tracker](docs/agents/issue-tracker.md).
 
-Use English for PR titles and descriptions. Keep titles, descriptions, and
-comments self-contained: do not mention or link to another repository's PR,
-including companion, dependency, or merge-order references. Describe required
-interface or build behavior directly.
+### Triage labels
+
+Use the five canonical triage labels. Before triage, read
+[label mapping](docs/agents/triage-labels.md).
+
+### Domain docs
+
+Single-context layout. Before codebase exploration or domain/ADR work,
+read [domain guidance](docs/agents/domain.md).
 
 ## Verification
 
 Run `git diff --check` for all changes. Match further verification to the change;
 expand or repeat checks only for new changes, failures, or unresolved concerns.
 
-- Go changes: format changed files with `gofmt`, then `go test ./... -count=1`.
+- Go changes: `gofmt` changed files and run affected tests. Use
+  `go test ./... -count=1` for shared lifecycle, API, or dependency changes,
+  or when the impact cannot be contained to specific packages.
 - Invoke changes: cover dispatch/models, response shapes, and removed methods
   where relevant; verify downstream request models against the same contract.
 - Bridge/build changes: build the affected artifact where supported. Report

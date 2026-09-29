@@ -126,11 +126,19 @@ Linux and Windows builds also produce `bin/xray` or `bin/xray.exe`. This
 session Core protects Go DNS lookups from the VPN route and accepts only:
 
 ```shell
-xray run -dns <IP:port> -interface <name> -config <xray.json>
+xray run -dns <IP:port> -interface <name> -config <xray.json> [-error-file <path>]
 ```
 
-All three options are required. `-dns` must be an IP endpoint, and `-config`
+The `-dns`, `-interface`, and `-config` options are required. `-dns` must be an IP endpoint, and `-config`
 points directly to the Xray JSON configuration.
+
+The optional `-error-file` also writes command failures to a UTF-8 file before
+exiting, preserving the same error printed to stderr. The file is cleared before
+running; a successful run leaves it empty. Its parent directory must exist.
+Callers launching an elevated Core should create the file first under their own
+account so they retain read access. This is an error-return channel, not Xray's
+access/error log configuration, and it does not add a separate validation pass.
+Applications using this option must bundle a desktop Core built with its support.
 
 > [!WARNING]
 > **Use only one Go runtime per process.** Go does not support loading multiple
@@ -353,7 +361,27 @@ Speed ​​test the Xray configuration.
 
 ### port
 
-Get free ports.
+`getFreePorts` returns distinct free TCP ports on localhost. Its payload accepts
+`count` and an optional `excludePorts` list of caller-reserved port numbers:
+
+```json
+{
+  "apiVersion": 3,
+  "method": "getFreePorts",
+  "payload": {"count": 2, "excludePorts": [18587, 9000]}
+}
+```
+
+The response keeps the existing `data.ports` integer array. Omit `excludePorts`
+or pass an empty list for no exclusions; duplicates have no additional effect.
+Excluded ports must be between 1 and 65535. Negative or impossible counts fail;
+zero returns no ports. The Go entrypoint is
+`nodep.GetFreePorts(count int, excludePorts []int)`; pass `nil` for no exclusions.
+
+Listeners remain open during selection to avoid duplicates or repeatedly picking
+an excluded port, and close before the function returns, including on failure.
+The returned ports are therefore candidates, not reservations: another process
+can claim them before the caller binds. This checks TCP only, not UDP.
 
 ## share
 
@@ -362,9 +390,9 @@ meaning as the local bind address.
 
 ### generate_share
 
-Convert Xray JSON to VMess AEAD / VLESS share links following
+Convert Xray JSON to VMessAEAD / VLESS share links following
 [Xray-core discussion #716](https://github.com/XTLS/Xray-core/discussions/716).
-SS, SOCKS and Trojan share links are also supported. VMess always generates
+Hysteria2, SS, SOCKS and Trojan share links are also supported. VMess always generates
 an AEAD URI, not the legacy QR-code format.
 
 Outbounds without a supported share-link format are skipped. Conversion fails
@@ -372,13 +400,45 @@ if no share links can be generated.
 
 ### parse_share
 
-Parse VMess AEAD / VLESS, SS, SOCKS and Trojan share links, plus legacy
-`vmessQrCode` links, into Xray JSON.
+Parse VMessAEAD / VLESS, Hysteria2, SS, SOCKS and Trojan share links into Xray JSON.
+Legacy VMessQrCode links (`vmess://Base64(JSON)`) are not supported.
 
 Xray JSON node input and Base64 / Age subscription wrappers remain supported.
-Clash/Mihomo configurations and `hysteria2://` / `hy2://` URIs are not supported.
-This restriction concerns share-link conversion, not Hysteria2 in native
-Xray JSON configurations.
+Clash/Mihomo configurations remain unsupported.
+
+Hysteria2 accepts `hysteria2://` and `hy2://` using the
+[official URI scheme](https://v2.hysteria.network/docs/developers/URI-Scheme/):
+optional authentication, default port 443, IPv6, SNI, Salamander obfuscation,
+multi-port authorities and fragment names. Export uses `hysteria2://`.
+Port hopping uses Core's `finalmask.udp` with both local and remote interval
+hopping (30 seconds by default; `hop-interval` must be at least 5 seconds).
+Legacy `ports` / `mport` queries are accepted and exported as authority ports.
+Legacy `up` / `down` values are imported as client-local QUIC tuning, not exported.
+
+TLS is mandatory. `insecure=true` / `allowInsecure=true` and `pinSHA256` are
+rejected: the bundled Core cannot preserve those Hysteria TLS semantics.
+Explicit Xray `fp`, `alpn`, `ech`, `pcs` and `vcn` extensions retain their Xray
+meaning. Export rejects TLS/mask settings that cannot be represented, rather
+than silently dropping security or obfuscation. Client-local QUIC tuning is
+not part of the URI. Realm and Gecko are not supported. Hopping requires a
+direct UDP socket; this does not add hopping support over chained proxies.
+
+VMessAEAD / VLESS field mappings follow the
+[Xray share-link proposal](https://github.com/XTLS/Xray-core/discussions/716)
+where supported by the bundled Core:
+
+- mKCP `mtu` and `tti` are preserved in both directions. Omitted values use
+  Core defaults; Core validates their ranges. Legacy KCP `seed` and `headerType`
+  are not imported or exported.
+- XHTTP `extra` keeps its complete JSON content, including nested settings.
+  `fm` carries FinalMask masks and all Core-supported `quicParams` fields.
+- TLS `ech`, `pcs`, `vcn` and REALITY `pbk`, `sid`, `pqv`, `spx` are preserved
+  alongside `sni`, `fp` and TLS `alpn`. An omitted `sni` uses the remote host,
+  not the WebSocket HTTP host.
+- Native transport aliases retain their settings when exported. RAW/TCP links
+  use `type=tcp`; query values use percent-encoded spaces.
+- gRPC supports `gun` and `multi`. The bundled Core does not support `guna`
+  mode or the removed HTTP/QUIC transports; these are not silently substituted.
 
 #### Parsing result
 
@@ -435,10 +495,6 @@ application must persist the pair and send only `publicKey` as
 `X-Age-Public-Key`. libXray does not perform the subscription HTTP request,
 persist keys, or add headers. Applications must never send the secret key over
 HTTP or write decrypted subscription text to disk.
-
-### vmess
-
-convert VMessQRCode to Xray Json.
 
 ### xray_json
 
@@ -504,7 +560,7 @@ failure and do not perform either request.
 
 ### testXray
 
-Loads and builds the complete configuration from the supplied JSON text. The
+Loads the supplied JSON text and constructs a temporary Xray instance. The
 payload contains only `xrayJson`; success returns `data: {}`:
 
 ```json
@@ -517,17 +573,26 @@ payload contains only `xrayJson`; success returns `data: {}`:
 }
 ```
 
-The Go entrypoint `TestXray` uses `core.LoadConfig` without constructing or
-starting an Xray instance or runtime handlers. It validates configuration
-structure, including TUN/WireGuard definitions, without creating devices,
-listeners, log files, or background connections. The builder can still read
-local GeoData/certificates and apply the root `env` to the current process.
-Geodata asset declarations validate HTTPS URLs and existing local files; their
-downloader/cron does not run during validation.
+The Go entrypoint `TestXray` calls `newXrayInstance` (`core.LoadConfig` followed
+by `core.New`) and closes the successfully constructed instance before returning.
+It never calls `Start` or publishes a managed instance. Core construction errors,
+including invalid routing matchers and missing balancers, and close errors are
+returned through the normal error response.
 
-A successful check establishes that the configuration builds. It does not
-prove that runtime resources are available, that an instance can start, or
-that the network is reachable. Callers must handle actual startup failures.
+This is not a sandbox. Builders and constructors may read local GeoData and
+certificates, apply `env`, replace process-global logging/DNS state, create log
+files, or initialize protocol-specific resources and background tasks. Process
+state is not restored. In particular, WireGuard can acquire a TUN during
+construction and VLESS reverse can schedule background work. The current Core
+does not return its partial instance when construction fails, so libXray cannot
+close that partial instance. Core-managed geodata cron does not run without
+`Start`, although its asset declarations still check local files.
+
+Callers may provide a minimal configuration or remove App-managed fields from a
+disposable validation copy; libXray applies no App-specific filtering. Only the
+supplied configuration is checked. Success establishes instance construction and
+close, not listener/TUN startup, system permissions, or network connectivity.
+Callers must handle actual startup failures.
 
 ### runXray
 

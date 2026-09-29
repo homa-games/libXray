@@ -9,13 +9,16 @@ import (
 
 const validShareOutbound = `{"protocol":"vless","tag":"Keep","settings":{"address":"example.com","port":443,"id":"12345678-abcd-abcd-abcd-123456789abc","encryption":"none"},"streamSettings":{"security":"tls","tlsSettings":{"serverName":"example.com"}}}`
 
+const legacyVMessQRCodeJSON = `{"v":"2","ps":"Legacy","add":"vm.example","port":"443","id":"` + testShareUUID + `","aid":"0","scy":"auto","net":"ws","path":"/ws","tls":"tls"}`
+
 func TestConvertShareLinksSkipsInvalidCandidates(t *testing.T) {
 	jsonText := `{"outbounds":[` + validShareOutbound + `,{"protocol":"freedom"},{"protocol":42},null,{"protocol":"vless","settings":{"id":"invalid"}}]}`
 	for _, test := range []struct {
 		name, text string
 	}{
 		{"links with headers", "Subscription export\n# comment\n\n" + ageTestShareLink + "\nvless://bad@example.com:443?encryption=none\nunknown://example.com"},
-		{"links with removed protocols", "hy2://auth@hy.example:443\n" + ageTestShareLink + "\nhysteria2://auth@hy.example:443"},
+		{"links with unsupported Hysteria TLS", "hy2://auth@hy.example:443?insecure=1\n" + ageTestShareLink + "\nhysteria2://auth@hy.example:443?pinSHA256=bad"},
+		{"links with VMessQrCode", "vmess://" + base64.StdEncoding.EncodeToString([]byte(legacyVMessQRCodeJSON)) + "\n" + ageTestShareLink},
 		{"JSON elements", jsonText},
 		{"base64 JSON", base64.StdEncoding.EncodeToString([]byte(jsonText))},
 		{"base64 links", base64.StdEncoding.EncodeToString([]byte(ageTestShareLink + "\nvless://bad@example.com:443"))},
@@ -36,8 +39,9 @@ func TestConvertShareLinksRejectsRemovedFormats(t *testing.T) {
 	}{
 		{"Clash YAML", "proxies:\n  - {name: Node, type: vless, server: example.com, port: 443, uuid: " + testShareUUID + "}"},
 		{"Mihomo JSON", `{"proxies":[{"name":"Node","type":"vless","server":"example.com","port":443,"uuid":"` + testShareUUID + `"}]}`},
-		{"Hysteria2 URI", "hysteria2://auth@hy.example:443?sni=hy.example"},
-		{"Hy2 URI", "hy2://auth@hy.example:443?sni=hy.example"},
+		{"Hysteria realm URI", "hysteria2+realm://token@realm.example/name?auth=password"},
+		{"VMessQrCode", "vmess://" + base64.StdEncoding.EncodeToString([]byte(legacyVMessQRCodeJSON))},
+		{"VMessQrCode URL-safe", "vmess://" + base64.RawURLEncoding.EncodeToString([]byte(legacyVMessQRCodeJSON))},
 	} {
 		t.Run(input.name, func(t *testing.T) {
 			for _, encoding := range []struct {
@@ -103,6 +107,7 @@ func TestConvertShareLinksAgeSkipsInvalidCandidatesAndRedactsErrors(t *testing.T
 	for _, input := range []string{
 		ageTestShareLink + "\nvless://secret-not-a-uuid@example.com:443",
 		`{"outbounds":[` + validShareOutbound + `,{"protocol":false}]}`,
+		"hy2://age-password@hy.example:443#Age%20Hysteria",
 	} {
 		result, err := ConvertShareLinksToXrayJson(encryptAgeForTest(t, pair, input), pair.SecretKey)
 		if err != nil {
@@ -114,8 +119,9 @@ func TestConvertShareLinksAgeSkipsInvalidCandidatesAndRedactsErrors(t *testing.T
 		"vless://secret-not-a-uuid@example.com:443",
 		`{"outbounds":"private-source"}`,
 		"proxies:\n  - {type: vless, server: example.com, port: 443, uuid: " + testShareUUID + "}",
-		"hysteria2://private-password@hy.example:443",
-		"hy2://private-password@hy.example:443",
+		"hysteria2://private-password@hy.example:443?insecure=1",
+		"hy2://private-password@hy.example:443?obfs=unsupported",
+		"vmess://" + base64.StdEncoding.EncodeToString([]byte(legacyVMessQRCodeJSON)),
 	} {
 		result, err := ConvertShareLinksToXrayJson(encryptAgeForTest(t, pair, input), pair.SecretKey)
 		if err != ErrAgePlaintextUnsupported {

@@ -42,11 +42,17 @@ Linux 和 Windows 构建还会生成 `bin/xray` 或 `bin/xray.exe`。该会话 C
 会保护 Go DNS 查询不被 VPN 路由重新捕获，并且只接受以下命令：
 
 ```shell
-xray run -dns <IP:port> -interface <网卡名> -config <xray.json>
+xray run -dns <IP:port> -interface <网卡名> -config <xray.json> [-error-file <路径>]
 ```
 
-三个参数都必须提供。`-dns` 必须是 IP endpoint，`-config` 直接指向 Xray
+`-dns`、`-interface`、`-config` 均必须提供。`-dns` 必须是 IP endpoint，`-config` 直接指向 Xray
 JSON 配置。
+
+可选的 `-error-file` 将命令失败时打印到 stderr 的原始错误同时写入 UTF-8 文件，
+随后退出。运行前清空文件，成功时保持为空；父目录必须已经存在。通过提权启动 Core
+的调用方应先以自身账号创建文件，以保留读取权限。该文件仅用于返回错误，不是
+Xray 的 access/error 日志配置，也不增加额外的预校验。使用此参数的 App 必须同时
+打包支持该参数的新版桌面 Core。
 
 > [!WARNING]
 > **每个进程只能使用一个 Go runtime。** Go 不支持在同一进程中加载多个独立构建的
@@ -218,7 +224,25 @@ LibXray.resetDNS();
 
 ### port
 
-获取空闲端口。
+`getFreePorts` 返回 localhost 上互不重复的空闲 TCP 端口。payload 支持
+`count` 和可选的 `excludePorts`，用于避开调用方预留的固定端口：
+
+```json
+{
+  "apiVersion": 3,
+  "method": "getFreePorts",
+  "payload": {"count": 2, "excludePorts": [18587, 9000]}
+}
+```
+
+响应保持现有的 `data.ports` 整数数组。省略 `excludePorts` 或传空列表表示不排除端口，
+重复值不影响结果。排除端口必须在 1–65535 之间；数量为负数或超过可用范围时报错，
+数量为 0 时不返回端口。Go 入口为 `nodep.GetFreePorts(count int, excludePorts []int)`，
+不排除端口时传入 `nil`。
+
+选择期间保持监听，避免返回重复端口或反复选中同一个排除端口；返回前关闭全部监听，
+失败时也会关闭。因此结果仅为候选端口，不构成预留，调用方绑定前仍可能被其他进程占用。
+仅检查 TCP，不检查 UDP。
 
 ## share
 
@@ -227,19 +251,46 @@ libXray 使用 `tag` 存储节点名称。`sendThrough` 保留 Xray 原生语义
 ### generate_share
 
 按照 [Xray-core 讨论 #716](https://github.com/XTLS/Xray-core/discussions/716)
-将 Xray JSON 转换为 VMess AEAD / VLESS 分享链接，同时支持 SS、SOCKS 和 Trojan。
+将 Xray JSON 转换为 VMessAEAD / VLESS 分享链接，同时支持 Hysteria2、SS、SOCKS 和 Trojan。
 VMess 始终生成 AEAD URI，不生成旧版二维码格式。
 
 没有对应分享格式的 outbound 会被跳过；无法生成任何分享链接时返回失败。
 
 ### parse_share
 
-将 VMess AEAD / VLESS、SS、SOCKS、Trojan 分享链接以及旧版 `vmessQrCode`
-链接解析为 Xray JSON。
+将 VMessAEAD / VLESS、Hysteria2、SS、SOCKS、Trojan 分享链接解析为 Xray JSON。
+不支持旧版 VMessQrCode 链接（`vmess://Base64(JSON)`）。
 
-保留 Xray JSON 节点输入以及 Base64 / Age 订阅包装。Clash/Mihomo 配置和
-`hysteria2://` / `hy2://` URI 不受支持。
-这一限制仅针对分享链接转换，不影响原生 Xray JSON 配置中的 Hysteria2。
+保留 Xray JSON 节点输入以及 Base64 / Age 订阅包装，不支持 Clash/Mihomo 配置。
+
+Hysteria2 接受 `hysteria2://` 和 `hy2://`，遵循
+[官方 URI 格式](https://v2.hysteria.network/docs/developers/URI-Scheme/)：支持可选认证、
+默认端口 443、IPv6、SNI、Salamander 混淆、多端口 authority 与名称 fragment。
+导出统一使用 `hysteria2://`。端口跳跃映射到 Core 的 `finalmask.udp`，同时启用本地与
+远端定时跳跃，默认 30 秒，`hop-interval` 至少为 5 秒。兼容 `ports` / `mport` 查询参数，
+导出时转为 authority 中的多端口。旧 `up` / `down` 仅导入为客户端 QUIC 调优，不导出。
+
+TLS 必须开启。拒绝 `insecure=true` / `allowInsecure=true` 和 `pinSHA256`，
+因为当前 Core 无法等价表达这些 Hysteria 证书校验语义。显式 Xray 扩展 `fp`、`alpn`、
+`ech`、`pcs`、`vcn` 保留 Xray 原有语义。无法表达的 TLS 或 mask 设置拒绝导出，
+不静默丢弃安全或混淆配置。客户端 QUIC 调优不属于 URI。不支持 Realm 或 Gecko。
+端口跳跃需要直接 UDP socket；本次恢复不增加链式代理上的跳跃支持。
+
+VMessAEAD / VLESS 的字段映射遵循
+[Xray 分享链接提案](https://github.com/XTLS/Xray-core/discussions/716)，
+以当前内置 Core 支持的能力为限：
+
+- 双向保留 mKCP 的 `mtu` 和 `tti`。省略时使用 Core 默认值，数值范围由
+  Core 校验。不导入或导出旧版 KCP 的 `seed` 和 `headerType`。
+- XHTTP `extra` 保留完整 JSON 内容，包括嵌套配置。`fm` 保留 FinalMask
+  掩饰配置和全部 Core 支持的 `quicParams` 字段。
+- 保留 TLS 的 `ech`、`pcs`、`vcn`，REALITY 的 `pbk`、`sid`、`pqv`、`spx`，
+  以及 `sni`、`fp` 和 TLS `alpn`。省略 `sni` 时使用远端主机，
+  不使用 WebSocket 的 HTTP host。
+- 从原生配置导出时保留传输别名对应的配置。RAW/TCP 链接使用 `type=tcp`，
+  查询参数中的空格使用百分号编码。
+- gRPC 支持 `gun` 和 `multi`。当前内置 Core 不支持 `guna` 模式以及
+  已移除的 HTTP/QUIC 传输，不会将其静默替换成其他模式。
 
 #### 解析结果
 
@@ -293,10 +344,6 @@ outbound，不做节点 hash 比较、去重或失败节点计数。
 只将 `publicKey` 作为 `X-Age-Public-Key` 发送。libXray 不负责订阅 HTTP 请求、
 密钥持久化或请求 Header；严禁通过 HTTP 发送私钥，也不能把解密后的订阅文本
 写入磁盘。
-
-### vmess
-
-转换 VMessQRCode 为 Xray Json。
 
 ### xray_json
 
@@ -355,7 +402,7 @@ GET 成功后把响应正文原样放入 `locationJson` 字符串。JSON 解析�
 
 ### testXray
 
-加载并构建传入的完整 Xray JSON 文本。payload 仅包含 `xrayJson`，成功时返回
+加载传入的 Xray JSON 文本并构造临时 instance。payload 仅包含 `xrayJson`，成功时返回
 `data: {}`：
 
 ```json
@@ -368,13 +415,19 @@ GET 成功后把响应正文原样放入 `locationJson` 字符串。JSON 解析�
 }
 ```
 
-Go 入口 `TestXray` 只调用 `core.LoadConfig`，不构造或启动 Xray instance 及运行时
-handler。它校验包括 TUN/WireGuard 定义在内的配置结构，不创建设备、监听、日志文件
-或后台连接。构建器仍可能读取本地 GeoData/证书，并将根 `env` 应用到当前进程。
-Geodata assets 声明只校验 HTTPS URL 和已存在的本地文件，下载器及 cron 不在校验时运行。
+Go 入口 `TestXray` 调用 `newXrayInstance`（`core.LoadConfig → core.New`），成功构造后
+关闭临时 instance，再返回结果。不调用 `Start`，也不登记为受管理的运行 instance。
+路由匹配器、缺失 balancer 等构造错误以及关闭错误通过正常错误响应返回。
 
-校验成功只说明配置可以构建，不保证运行资源可用、instance 可以启动或网络可以连接。
-调用方仍须处理实际启动失败。
+校验不是沙箱：构建器和构造器可能读取本地 GeoData/证书、应用 `env`、替换进程级
+日志/DNS 状态、创建日志文件，或初始化协议专属资源与后台任务。这些进程状态不恢复。
+WireGuard 可能在构造时创建 TUN，VLESS reverse 可能安排后台任务。当前 Core 构造失败时
+不返回部分 instance，因此 libXray 无法关闭该部分 instance。不调用 `Start` 时，内核
+Geodata cron 不运行，但 assets 声明仍会检查本地文件。
+
+调用方允许构造最小配置，或在验证副本中排除 App 管理的字段；libXray 不做 App 专属裁剪。
+成功只说明传入配置可以完成实例构造和关闭，不覆盖监听/TUN 启动、系统权限与网络连通性。
+被排除的配置不在验证范围内，调用方仍须处理实际启动失败。
 
 ### runXray
 

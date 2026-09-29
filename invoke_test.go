@@ -211,19 +211,15 @@ func TestInvokeTestXray(t *testing.T) {
 	requireNoDataObject(t, response)
 }
 
-func TestInvokeTestXrayDoesNotCreateRuntimeResources(t *testing.T) {
-	logPath := filepath.Join(t.TempDir(), "not-created", "error.log")
+func TestInvokeTestXrayConstructsWithoutStarting(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "error.log")
 	config, err := json.Marshal(map[string]any{
 		"log": map[string]any{"error": logPath, "loglevel": "debug"},
 		"inbounds": []any{
 			map[string]any{"tag": "tunIn", "protocol": "tun", "settings": map[string]any{"name": "TestXrayMustNotCreate", "mtu": 1500}},
 		},
 		"outbounds": []any{
-			map[string]any{"protocol": "wireguard", "settings": map[string]any{
-				"secretKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-				"address":   []string{"10.0.0.2/32"},
-				"peers":     []any{map[string]any{"publicKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", "endpoint": "127.0.0.1:9"}},
-			}},
+			map[string]any{"protocol": "freedom", "tag": "direct"},
 		},
 	})
 	if err != nil {
@@ -231,15 +227,26 @@ func TestInvokeTestXrayDoesNotCreateRuntimeResources(t *testing.T) {
 	}
 	response := invokeForTest(t, LibXrayMethodTestXray, TestXrayRequest{XrayJson: string(config)})
 	if !response.Success {
-		t.Fatalf("testXray must accept structurally valid TUN/WireGuard without construction: %s", response.Err)
+		t.Fatalf("testXray must construct handlers without starting the TUN: %s", response.Err)
 	}
 	requireNoDataObject(t, response)
-	if _, err := os.Stat(filepath.Dir(logPath)); !os.IsNotExist(err) {
-		t.Fatalf("testXray created a runtime log directory: %v", err)
+	if _, err := os.Stat(logPath); err != nil {
+		t.Fatalf("testXray did not construct the configured file logger: %v", err)
 	}
 	response = invokeForTest(t, LibXrayMethodTestXray, TestXrayRequest{XrayJson: `{"outbounds":[{"protocol":"unknown"}]}`})
 	if response.Success || string(response.Data) != "null" {
 		t.Fatalf("testXray must still reject invalid core configuration: %+v", response)
+	}
+}
+
+func TestInvokeTestXrayReturnsConstructionError(t *testing.T) {
+	response := invokeForTest(t, LibXrayMethodTestXray, TestXrayRequest{XrayJson: `{
+		"log":{"loglevel":"none"},
+		"outbounds":[{"protocol":"freedom","tag":"direct"}],
+		"routing":{"rules":[{"domain":["example.com"],"balancerTag":"missing"}]}
+	}`})
+	if response.Success || string(response.Data) != "null" || !strings.Contains(response.Err, "balancer missing not found") {
+		t.Fatalf("testXray must expose the core construction error: %+v", response)
 	}
 }
 
@@ -324,6 +331,32 @@ func TestInvokeXrayVersion(t *testing.T) {
 	}
 }
 
+func TestInvokeGetFreePortsExclusions(t *testing.T) {
+	response := invokeRawForTest(t, `{"apiVersion":3,"method":"getFreePorts","payload":{"count":2,"excludePorts":[18587,9000,18587]}}`)
+	if !response.Success {
+		t.Fatalf("GetFreePorts failed: %s", response.Err)
+	}
+	ports := decodeDataObject[GetFreePortsResponse](t, response).Ports
+	if len(ports) != 2 || ports[0] == ports[1] {
+		t.Fatalf("ports = %v, want two distinct ports", ports)
+	}
+	for _, port := range ports {
+		if port == 18587 || port == 9000 {
+			t.Fatalf("excluded port returned: %d", port)
+		}
+	}
+	response = invokeForTest(t, LibXrayMethodGetFreePorts, GetFreePortsRequest{
+		Count: 1, ExcludePorts: []int{0},
+	})
+	if response.Success || !strings.Contains(response.Err, "excluded port") {
+		t.Fatalf("invalid exclusion response = %+v", response)
+	}
+	response = invokeRawForTest(t, `{"apiVersion":3,"method":"getFreePorts","payload":{"count":1,"excludePorts":["18587"]}}`)
+	if response.Success {
+		t.Fatal("string exclusion should fail JSON decoding")
+	}
+}
+
 func TestInvokeMapResponseShape(t *testing.T) {
 	response := invokeForTest(t, LibXrayMethodGetFreePorts, GetFreePortsRequest{Count: 1})
 	if !response.Success {
@@ -383,13 +416,40 @@ func TestInvokeConvertShareLinksFiltersBuildInvalidOutbounds(t *testing.T) {
 	}
 }
 
+func TestInvokeHysteria2ShareRoundTrip(t *testing.T) {
+	for _, scheme := range []string{"hysteria2", "hy2"} {
+		t.Run(scheme, func(t *testing.T) {
+			response := invokeForTest(t, LibXrayMethodConvertShareLinksToXrayJson,
+				ConvertShareLinksToXrayJsonRequest{Text: scheme + "://password@example.com:443?obfs=salamander&obfs-password=secret#Test"})
+			if !response.Success {
+				t.Fatal(response.Err)
+			}
+			config := decodeShareConfig(t, response)
+			if len(config.OutboundConfigs) != 1 || config.OutboundConfigs[0].Protocol != "hysteria" || config.OutboundConfigs[0].Tag != "Test" {
+				t.Fatalf("unexpected Hysteria2 projection: %s", response.Data)
+			}
+			if result := invokeForTest(t, LibXrayMethodTestXray, TestXrayRequest{XrayJson: string(response.Data)}); !result.Success {
+				t.Fatal(result.Err)
+			}
+			result := invokeForTest(t, LibXrayMethodConvertXrayJsonToShareLinks,
+				ConvertXrayJsonToShareLinksRequest{XrayJson: string(response.Data)})
+			if !result.Success {
+				t.Fatal(result.Err)
+			}
+			links := decodeDataObject[ConvertXrayJsonToShareLinksResponse](t, result)
+			if !strings.HasPrefix(links.Links, "hysteria2://") || !strings.HasSuffix(links.Links, "#Test") {
+				t.Fatalf("unexpected Hysteria2 link: %s", links.Links)
+			}
+		})
+	}
+}
+
 func TestInvokeConvertShareLinksRejectsRemovedFormats(t *testing.T) {
 	for _, test := range []struct {
 		name, text string
 	}{
 		{"Clash", "proxies:\n  - {type: vless, server: example.com, port: 443, uuid: 12345678-abcd-abcd-abcd-123456789abc}"},
-		{"Hysteria2", "hysteria2://password@example.com:443"},
-		{"Hy2", "hy2://password@example.com:443"},
+		{"HysteriaRealm", "hysteria2+realm://token@example.com/realm?auth=password"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			response := invokeForTest(t, LibXrayMethodConvertShareLinksToXrayJson,
@@ -440,6 +500,26 @@ func TestInvokeConvertShareLinksReturnsProjectedObject(t *testing.T) {
 	}
 	if _, err := config.OutboundConfigs[0].Build(); err != nil {
 		t.Fatalf("projected outbound does not build: %v", err)
+	}
+}
+
+func TestInvokeConvertShareLinksPreservesKCPParameters(t *testing.T) {
+	response := invokeForTest(t, LibXrayMethodConvertShareLinksToXrayJson,
+		ConvertShareLinksToXrayJsonRequest{Text: "vless://12345678-abcd-abcd-abcd-123456789abc@127.0.0.1:443?type=kcp&mtu=1350&tti=30"})
+	if !response.Success {
+		t.Fatalf("ConvertShareLinksToXrayJson failed: %s", response.Err)
+	}
+	config := decodeShareConfig(t, response)
+	if len(config.OutboundConfigs) != 1 {
+		t.Fatalf("outbounds = %d, want 1", len(config.OutboundConfigs))
+	}
+	stream := config.OutboundConfigs[0].StreamSetting
+	if stream == nil || stream.KCPSettings == nil {
+		t.Fatal("KCP settings missing from Invoke response")
+	}
+	kcp := stream.KCPSettings
+	if kcp.Mtu == nil || *kcp.Mtu != 1350 || kcp.Tti == nil || *kcp.Tti != 30 {
+		t.Fatalf("unexpected KCP parameters: %s", response.Data)
 	}
 }
 
