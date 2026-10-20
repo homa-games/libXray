@@ -1,8 +1,5 @@
 name: Build Android
 
-env:
-  NDK_VERSION: r29
-
 on:
   workflow_dispatch:
     inputs:
@@ -19,6 +16,7 @@ jobs:
   build:
     name: Build Android
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     permissions:
       contents: write
     concurrency:
@@ -33,27 +31,21 @@ jobs:
           ref: ${{ inputs.commit_hash || github.ref }}
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
       - name: Set up Java
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v6
         with:
           java-version: '21'
           distribution: 'temurin'
-
-      - name: Set up Android NDK
-        uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: ${{ env.NDK_VERSION }}
-          add-to-path: true
 
       - name: Build Android Library
         run: python3 build/main.py android
